@@ -149,15 +149,15 @@ int llopen(LinkLayer connectionParameters)
          (void)signal(SIGALRM, alarmHandler);
         while (alarmCount < connectionParameters.nRetransmissions && STOP == FALSE) {
         if (alarmEnabled == FALSE) {
-            buf[0] = 0x7E;  // flag
-            buf[1] = 0x03;  // addr
+            buf[0] = FRAME_FLAG;  // flag
+            buf[1] = ADDR_TX;  // addr
             buf[2] = 0x03;  // control
             buf[3] = buf[1] ^ buf[2];   // BCC
-            buf[4] = 0x7E;
+            buf[4] = FRAME_FLAG;
 
             int bytes = write(fd, buf, 5);
     
-            alarm(3);   
+            alarm(connectionParameters.timeout);   
             alarmEnabled = TRUE;
         }
         int bytess = 1;
@@ -231,11 +231,11 @@ int llopen(LinkLayer connectionParameters)
     else{
     unsigned char buf[5];
     unsigned char buf2[5];
-    buf2[0]=0x7E;
-    buf2[1]=0x01;
+    buf2[0]=FRAME_FLAG;
+    buf2[1]=ADDR_RX;
     buf2[2]=0x07;
     buf2[3]=buf2[1]^buf2[2];
-    buf2[4]=0x7E;
+    buf2[4]=FRAME_FLAG;
 
        // Returns after 5 chars have been input
            int STOP=0;
@@ -438,13 +438,14 @@ int llread(unsigned char *packet)
         //logByte("Received", frame[j]);
         
         frame[j]=buf[0];
+        bytesRead++;
+        j++;
         if(buf[0]==0x7E){
             printf("found it the flag: %d", j);
             logByte("Received", frame[j]);
             break;
         }
-        bytesRead++;
-        j++;
+        
     }
     receivedLength = bytesRead;
     printf("Size of frame received: %d\n", bytesRead);
@@ -470,22 +471,22 @@ int llread(unsigned char *packet)
         return -1; // header BCC check failed
     }
 
-    int destuffedLength = destuffBytes(frame + 4, bytesRead - 5, packet); // skipping the flags, address, control and BCCs
+    int destuffedLength = destuffBytes(frame + 4, bytesRead - 6, packet); // skipping the flags, address, control and BCCs
     if(destuffedLength == -1) {
         printf("Error during byte destuffing.\n");
         return -1;
     }
 
-    unsigned char receivedBcc2 = frame[bytesRead-1];
-    unsigned char calculatedBcc2 = computeBCC2(packet, bytesRead - 5);
-     printf("bcc2= 0x%02X\n", frame[bytesRead-1]);
+    unsigned char receivedBcc2 = frame[bytesRead-2];
+    unsigned char calculatedBcc2 = computeBCC2(packet, bytesRead - 6);
+     printf("bcc2= 0x%02X\n", frame[bytesRead-2]);
     if (receivedBcc2 != calculatedBcc2) {
         printf("BCC2 check failed\n");
         for(int x=0; x<destuffedLength; x++){
         logByte("received", packet[x]);
         }
-        logByte("received", packet[0]);
-        logByte("received", packet[destuffedLength-1]);
+        //logByte("received", packet[0]);
+        //logByte("received", packet[destuffedLength-1]);
         printf("Calculated BCC2: 0x%02X\n", calculatedBcc2);
         
         return -1;
