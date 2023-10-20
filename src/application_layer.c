@@ -101,6 +101,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 i=0;
             }
         }
+        printf("done");
 
     }
     // Receiver logic

@@ -21,6 +21,58 @@ int fd;
 
 LinkLayer oficial;
 
+int stuffBytes(const unsigned char* input, int inputSize, unsigned char* output) {
+    int outputSize = 0;
+
+    for(int i = 0; i < inputSize; i++) {
+
+        if(input[i] == 0x7E) { // If the byte matches the flag
+            output[outputSize++] = 0x7D; // Escape byte
+            output[outputSize++] = 0x5E; // Result of XOR with 0x20
+        } else if(input[i] == 0x7D) { // If the byte matches the escape byte
+            output[outputSize++] = 0x7D; // Escape byte
+            output[outputSize++] = 0x5D; // Result of XOR with 0x20
+        } else {
+            output[outputSize++] = input[i]; // Regular byte
+        }
+    }
+
+    return outputSize;
+}
+
+int destuffBytes(const unsigned char* input, int inputSize, unsigned char* output) {
+    int outputSize = 0;
+    int i = 0;
+
+    while(i < inputSize) {
+        if(input[i] == 0x7D) { // Escape byte detected
+            i++; // Move to next byte
+
+            if(i >= inputSize) {
+                printf("Error: Truncated escape sequence at end of input.\n");
+                return -1; // Indicate error
+            }
+
+            if(input[i] == 0x5E) {
+                output[outputSize++] = 0x7E; // Replace with 0x7e
+            } else if(input[i] == 0x5D) {
+                output[outputSize++] = 0x7D; // Replace with 0x7d
+            } else {
+                printf("Error: Invalid escape sequence 0x7d 0x%02x.\n", input[i]);
+                return -1; // Indicate error
+            }
+        } else {
+            output[outputSize++] = input[i];
+        }
+
+        i++;
+    }
+
+    return outputSize;
+}
+
+
+
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
@@ -248,12 +300,23 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize, int number)
 {
-    int frameSize = bufSize + 6;
+    unsigned char stuffedBuffer[MAX_STUFFED_PAYLOAD_SIZE];
+    int stuffedLength = stuffBytes(buf, bufSize, stuffedBuffer);
+    
+    int frameSize = stuffedLength + 6;
     unsigned char *frame = (unsigned char *)malloc(frameSize);
     if (!frame) {
         perror("Memory allocation failed");
         return -1;
     }
+    printf("\n\n\n\n==============\n NEW INFO\n==============\n\n\n\n");
+     for(int x=0; x<bufSize; x++){
+        logByte("sent", buf[x]);
+     }
+     
+
+    //logByte("Sent", buf[0]);
+    //logByte("Sent", buf[bufSize-1]);
 
     unsigned char controlField = (number == 0) ? 0x00 : 0x40; // Using frame size to determine control field
 
@@ -261,7 +324,7 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
     frame[1] = ADDR_TX;
     frame[2] = controlField;
     frame[3] = ADDR_TX ^ controlField;
-    memcpy(frame + 4, buf, bufSize);
+    memcpy(frame + 4, stuffedBuffer, stuffedLength);
     frame[frameSize - 2] = computeBCC2(buf, bufSize);
      printf("bcc2 = 0x%02X\n", frame[frameSize-2]);
     frame[frameSize - 1] = FRAME_FLAG;
@@ -274,9 +337,9 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
         perror("Failed to write to serial port");
         return -1;
     }
-    for (int i = 0; i < bytesWritten; i++) {
+    //for (int i = 0; i < bytesWritten; i++) {
     //logByte("Sent", frame[i]);
-    }
+    //}
     int bytess = 1;
     int j = 0;
     unsigned char buf3[1];
@@ -287,7 +350,7 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
         if(bytess<=0){
             break;
         }
-        logByte("buffer", buf3[0]);
+        //logByte("buffer", buf3[0]);
         buf2[j] = buf3[0];
         j++;
     }
@@ -345,6 +408,8 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
+    unsigned char receivedBuffer[MAX_FRAME_SIZE];
+    int receivedLength;
     unsigned char frame[MAX_FRAME_SIZE];
     int bytesRead = 0;
     int byte;
@@ -358,10 +423,10 @@ int llread(unsigned char *packet)
 
     byte = read(fd, frame, 1);
     if (byte == -1 || frame[0] != 0x7E) {
-        printf("Err0r receiving data packet \n");
+        printf("Error receiving data packet \n");
         return -1; // error or no data read
     }
-    logByte("Received", frame[0]);
+    //logByte("Received", frame[0]);
     bytesRead++;
     int j=1;
     while(1){
@@ -381,6 +446,7 @@ int llread(unsigned char *packet)
         bytesRead++;
         j++;
     }
+    receivedLength = bytesRead;
     printf("Size of frame received: %d\n", bytesRead);
     if (ADDR_TX != frame[1]) {
         printf("Address check failed\n");
@@ -404,11 +470,24 @@ int llread(unsigned char *packet)
         return -1; // header BCC check failed
     }
 
-    unsigned char receivedBcc2 = frame[bytesRead-2];
-    unsigned char calculatedBcc2 = computeBCC2(&frame[4], bytesRead - 6);
-     printf("var 0 = 0x%02X\n", frame[j-2]);
+    int destuffedLength = destuffBytes(frame + 4, bytesRead - 5, packet); // skipping the flags, address, control and BCCs
+    if(destuffedLength == -1) {
+        printf("Error during byte destuffing.\n");
+        return -1;
+    }
+
+    unsigned char receivedBcc2 = frame[bytesRead-1];
+    unsigned char calculatedBcc2 = computeBCC2(packet, bytesRead - 5);
+     printf("bcc2= 0x%02X\n", frame[bytesRead-1]);
     if (receivedBcc2 != calculatedBcc2) {
         printf("BCC2 check failed\n");
+        for(int x=0; x<destuffedLength; x++){
+        logByte("received", packet[x]);
+        }
+        logByte("received", packet[0]);
+        logByte("received", packet[destuffedLength-1]);
+        printf("Calculated BCC2: 0x%02X\n", calculatedBcc2);
+        
         return -1;
     }
     
@@ -419,8 +498,6 @@ int llread(unsigned char *packet)
     }
 
     // If everything is good, copy the data to the packet
-    int dataSize = bytesRead - 6; // 6 = 1 starting flag + 3 header bytes + 1 data BCC + 1 ending flag
-    memcpy(packet, &frame[4], dataSize);
     return bytesRead;
 }
 
