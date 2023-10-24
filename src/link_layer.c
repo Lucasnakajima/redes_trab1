@@ -81,10 +81,6 @@ void alarmHandler(int signal)
     printf("try #%d , trying to send again...\n", alarmCount);
 }
 
-void logByte(const char* action, unsigned char byte) {
-    printf("%s: 0x%02X (%c)\n", action, byte, byte);
-}
-
 unsigned char computeBCC2(const unsigned char *data, int size) {
     unsigned char bcc2 = data[0];
     for (int i = 1; i < size; i++) {
@@ -237,7 +233,7 @@ int llopen(LinkLayer connectionParameters)
     buf2[3]=buf2[1]^buf2[2];
     buf2[4]=FRAME_FLAG;
 
-       // Returns after 5 chars have been input
+       
            int STOP=0;
         while(STOP==0){
         int bytess = 1;
@@ -284,12 +280,6 @@ int llopen(LinkLayer connectionParameters)
         }
     
     int bytes = write(fd, buf2, 5);
-
-    // The while() cycle should be changed in order to respect the specifications
-    // of the protocol indicated in the Lab guide
-
-    // Restore the old port settings
-
     }
 
     return 1;
@@ -309,16 +299,8 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
         perror("Memory allocation failed");
         return -1;
     }
-    printf("\n\n\n\n==============\n NEW INFO\n==============\n\n\n\n");
-     for(int x=0; x<bufSize; x++){
-        logByte("sent", buf[x]);
-     }
-     
 
-    //logByte("Sent", buf[0]);
-    //logByte("Sent", buf[bufSize-1]);
-
-    unsigned char controlField = (number == 0) ? 0x00 : 0x40; // Using frame size to determine control field
+    unsigned char controlField = (number == 0) ? 0x00 : 0x40;
 
     frame[0] = FRAME_FLAG;
     frame[1] = ADDR_TX;
@@ -326,10 +308,7 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
     frame[3] = ADDR_TX ^ controlField;
     memcpy(frame + 4, stuffedBuffer, stuffedLength);
     frame[frameSize - 2] = computeBCC2(buf, bufSize);
-     printf("bcc2 = 0x%02X\n", frame[frameSize-2]);
     frame[frameSize - 1] = FRAME_FLAG;
-
-    printf("size of frame sent: %d\n", frameSize);
 
 
     int bytesWritten = write(fd, frame, frameSize);
@@ -337,9 +316,6 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
         perror("Failed to write to serial port");
         return -1;
     }
-    //for (int i = 0; i < bytesWritten; i++) {
-    //logByte("Sent", frame[i]);
-    //}
     int bytess = 1;
     int j = 0;
     unsigned char buf3[1];
@@ -348,9 +324,9 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
     while(j<5){
         bytess = read(fd, buf3,1);
         if(bytess<=0){
-            break;
+            perror("Failed to read from the serial port");
+            return -1;
         }
-        //logByte("buffer", buf3[0]);
         buf2[j] = buf3[0];
         j++;
     }
@@ -429,39 +405,39 @@ int llread(unsigned char *packet)
     //logByte("Received", frame[0]);
     bytesRead++;
     int j=1;
+    volatile int close = FALSE;
     while(1){
         byte = read(fd, buf, 1);
         if (byte == -1) {
             printf("Err0r receiving data packet \n");
             return -1; // error or no data read
         }
-        //logByte("Received", frame[j]);
+        if(j==2 && buf[0]==DISC){
+            close=TRUE;
+        }
         
         frame[j]=buf[0];
         bytesRead++;
         j++;
         if(buf[0]==0x7E){
-            printf("found it the flag: %d", j);
-            logByte("Received", frame[j]);
             break;
         }
         
     }
     receivedLength = bytesRead;
-    printf("Size of frame received: %d\n", bytesRead);
     if (ADDR_TX != frame[1]) {
         printf("Address check failed\n");
         return -1; // header BCC check failed
     }
 
-    if (0x00 != frame[2]) {
+    if (0x00 != frame[2] && !close) {
         if(0x40 != frame[2]){
         printf("control check failed\n");
         return -1; // header BCC check failed
         }
     }
 
-    if(frame[2]==0x40){
+    if(frame[2]==0x40 && !close){
         buf2[2]=RR0;
     }
 
@@ -469,6 +445,9 @@ int llread(unsigned char *packet)
     if (bcc1 != frame[3]) {
         printf("BCC1 check failed\n");
         return -1; // header BCC check failed
+    }
+    if(close){
+        return 5;
     }
 
     int destuffedLength = destuffBytes(frame + 4, bytesRead - 6, packet); // skipping the flags, address, control and BCCs
@@ -478,18 +457,10 @@ int llread(unsigned char *packet)
     }
 
     unsigned char receivedBcc2 = frame[bytesRead-2];
-    unsigned char calculatedBcc2 = computeBCC2(packet, bytesRead - 6);
-     printf("bcc2= 0x%02X\n", frame[bytesRead-2]);
+    unsigned char calculatedBcc2 = computeBCC2(packet, destuffedLength);
     if (receivedBcc2 != calculatedBcc2) {
         printf("BCC2 check failed\n");
-        for(int x=0; x<destuffedLength; x++){
-        logByte("received", packet[x]);
-        }
-        //logByte("received", packet[0]);
-        //logByte("received", packet[destuffedLength-1]);
-        printf("Calculated BCC2: 0x%02X\n", calculatedBcc2);
-        
-        return -1;
+        return -1; 
     }
     
     byte = write(fd, buf2, 5);
@@ -507,7 +478,147 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    // TODO
+    unsigned char disc_tx[5];
+    disc_tx[0]=FRAME_FLAG;
+    disc_tx[1]=ADDR_TX;
+    disc_tx[2]=DISC;
+    disc_tx[3]=disc_tx[1]^disc_tx[2];
+    disc_tx[4]=FRAME_FLAG;
 
-    return 1;
+    unsigned char ua_tx[5];
+    ua_tx[0]=FRAME_FLAG;
+    ua_tx[1]=ADDR_TX;
+    ua_tx[2]=UA;
+    ua_tx[3]=ua_tx[1]^ua_tx[2];
+    ua_tx[4]=FRAME_FLAG;
+
+    unsigned char disc_rx[5];
+    unsigned char buff[1];
+    unsigned char buf[5];
+    disc_rx[0]=FRAME_FLAG;
+    disc_rx[1]=ADDR_RX;
+    disc_rx[2]=DISC;
+    disc_rx[3]=disc_rx[1]^disc_rx[2];
+    disc_rx[4]=FRAME_FLAG;
+   
+    if(oficial.role == LlTx){
+        fd = open(oficial.serialPort, O_RDWR | O_NOCTTY);
+        int byte = write(fd, disc_tx, 5);
+        if(byte < 0) {
+            perror("Failed to write to serial port");
+        return -1;
+        }
+        int j=0;
+
+         while(j<5){
+            int bytes = read(fd, buff,1);
+            if(bytes<=0){
+                break;
+            }
+            switch (j)
+            {
+            case 0:
+                if(buff[0]==FRAME_FLAG){
+                break;
+                }
+                printf("Error in flag check.\n");
+                return -1;
+            case 1:
+                if(buff[0]==ADDR_RX){
+                break;
+                }
+                printf("Error in address check.\n");
+                return -1;
+            case 2:
+                if(buff[0]==DISC){
+                break;
+                }
+                printf("Error in control check.\n");
+                return -1;
+            case 3:
+                if(buff[0]== buf[1]^buf[2]){
+                break;
+                }
+                printf("Error in bcc check.\n");
+                return -1;
+            case 4:
+                if(buff[0]==FRAME_FLAG){
+                break;
+                }
+                printf("Error in flag check.\n");
+                return -1;
+            
+            default:
+                return -1;
+                break;
+            }
+            buf[j] = buff[0];
+            j++;
+        }
+
+        byte = write(fd, ua_tx, 5);
+        if(byte < 0) {
+        perror("Failed to write to serial port");
+        return -1;
+        }
+        close(fd);
+        return 1;
+
+    }
+
+    else{
+        int byte = write(fd, disc_rx, 5);
+        int j=0;
+
+         while(j<5){
+            int bytes = read(fd, buff,1);
+            if(bytes<=0){
+                perror("Failed to read from serial port");
+                return -1;
+            }
+            switch (j)
+            {
+            case 0:
+                if(buff[0]==FRAME_FLAG){
+                break;
+                }
+                printf("Error in flag check.\n");
+                return -1;
+            case 1:
+                if(buff[0]==ADDR_TX){
+                break;
+                }
+                printf("Error in address check.\n");
+                return -1;
+            case 2:
+                if(buff[0]==UA){
+                break;
+                }
+                printf("Error in control check.\n");
+                return -1;
+            case 3:
+                if(buff[0]== buf[1]^buf[2]){
+                break;
+                }
+                printf("Error in bcc check.\n");
+                return -1;
+            case 4:
+                if(buff[0]==FRAME_FLAG){
+                break;
+                }
+                printf("Error in flag check.\n");
+                return -1;
+            
+            default:
+                return -1;
+                break;
+            }
+            buf[j] = buff[0];
+            j++;
+        }
+        close(fd);
+        return 1;
+    }
+
+    return -1;
 }

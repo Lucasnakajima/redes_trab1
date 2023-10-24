@@ -88,6 +88,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         unsigned char buffer[MAX_PAYLOAD_SIZE];
         int bytesRead;
         int i=0;
+        int j=0;
 
         while((bytesRead = readDataFromFile(filename, buffer, MAX_PAYLOAD_SIZE)) > 0) {
             if(llwrite(buffer, bytesRead, i) == -1) {
@@ -100,8 +101,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             else{
                 i=0;
             }
+            j++;
         }
-        printf("done");
+        printf("sent %d times \n", j);
+        if(llclose(0) != 1){
+          perror("Failed to close connection");
+          return;  
+        }
 
     }
     // Receiver logic
@@ -119,6 +125,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         int bytesRead = llread(packet);
         if (bytesRead == -1) {
             printf("Err0r receiving data packet \n");
+            break;
+        }
+        else if(bytesRead == 5){
             break;
         }
         // Save received data to file

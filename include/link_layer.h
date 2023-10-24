@@ -34,7 +34,8 @@ typedef struct
 #define ADDR_RX 0x01
 #define RR0 0x05
 #define RR1 0x85
-
+#define DISC 0X0B
+#define UA 0x07
 // Open a connection using the "port" parameters defined in struct linkLayer.
 // Return "1" on success or "-1" on error.
 int llopen(LinkLayer connectionParameters);
