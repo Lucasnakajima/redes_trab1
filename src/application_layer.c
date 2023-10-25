@@ -130,7 +130,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         else if(bytesRead == 5){
             break;
         }
-        // Save received data to file
+        bytesRead = bytesRead-6;
         if (write(fd_output, packet, bytesRead) < 0) {
             perror("Failed to write to file");
             close(fd_output);
@@ -148,5 +148,3 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         printf("Failed to close the connection.\n");
     }
 }
-
-// TODO: Implement 'readDataFromFile' and 'writeDataToFile' if you need them for file operations.
