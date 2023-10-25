@@ -21,6 +21,12 @@ int fd;
 
 LinkLayer oficial;
 
+#include <stdio.h>
+#include <time.h>
+
+
+
+
 int stuffBytes(const unsigned char* input, int inputSize, unsigned char* output) {
     int outputSize = 0;
 
@@ -70,7 +76,6 @@ int destuffBytes(const unsigned char* input, int inputSize, unsigned char* outpu
 
     return outputSize;
 }
-
 
 
 void alarmHandler(int signal)
@@ -300,6 +305,8 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
         return -1;
     }
 
+    
+
     unsigned char controlField = (number == 0) ? 0x00 : 0x40;
 
     frame[0] = FRAME_FLAG;
@@ -387,7 +394,7 @@ int llread(unsigned char *packet)
     unsigned char receivedBuffer[MAX_FRAME_SIZE];
     int receivedLength;
     unsigned char frame[MAX_FRAME_SIZE];
-    int bytesRead = 0;
+    int bytesRead = 1;
     int byte;
     unsigned char buf2[5];
     unsigned char buf[1];
@@ -402,8 +409,6 @@ int llread(unsigned char *packet)
         printf("Error receiving data packet \n");
         return -1; // error or no data read
     }
-    //logByte("Received", frame[0]);
-    bytesRead++;
     int j=1;
     volatile int close = FALSE;
     while(1){
@@ -455,6 +460,7 @@ int llread(unsigned char *packet)
         printf("Error during byte destuffing.\n");
         return -1;
     }
+    
 
     unsigned char receivedBcc2 = frame[bytesRead-2];
     unsigned char calculatedBcc2 = computeBCC2(packet, destuffedLength);
@@ -470,7 +476,7 @@ int llread(unsigned char *packet)
     }
 
     // If everything is good, copy the data to the packet
-    return bytesRead;
+    return destuffedLength;
 }
 
 ////////////////////////////////////////////////

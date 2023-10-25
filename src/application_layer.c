@@ -103,7 +103,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             }
             j++;
         }
-        printf("sent %d times \n", j);
+        //printf("sent %d times \n", j);
         if(llclose(0) != 1){
           perror("Failed to close connection");
           return;  
@@ -130,7 +130,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         else if(bytesRead == 5){
             break;
         }
-        bytesRead = bytesRead-6;
         if (write(fd_output, packet, bytesRead) < 0) {
             perror("Failed to write to file");
             close(fd_output);
