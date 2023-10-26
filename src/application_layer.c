@@ -104,7 +104,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             j++;
         }
         //printf("sent %d times \n", j);
-        if(llclose(0) != 1){
+        if(llclose(TRUE) != 1){
           perror("Failed to close connection");
           return;  
         }
@@ -120,9 +120,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         perror("Failed to open output file");
         return;
     }
-
+    int bytesRead;
     while (1) {
-        int bytesRead = llread(packet);
+        bytesRead = llread(packet);
         if (bytesRead == -1) {
             printf("Err0r receiving data packet \n");
             break;
@@ -136,14 +136,17 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             return;
         }
     }
+    if(bytesRead != -1){
+        close(fd_output);
+        printf("File received and saved as %s.\n", filename);
+        
 
-    close(fd_output);
-    printf("File received and saved as %s.\n", filename);
+        // Close the connection and show statistics
+        if (llclose(TRUE) == -1)
+        {
+            printf("Failed to close the connection.\n");
+        }
     }
-
-    // Close the connection and show statistics
-    if (llclose(TRUE) == -1)
-    {
-        printf("Failed to close the connection.\n");
     }
+    
 }

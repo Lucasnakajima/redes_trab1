@@ -24,6 +24,16 @@ LinkLayer oficial;
 #include <stdio.h>
 #include <time.h>
 
+static int correctlyReceivedFrameCount = 0; 
+const double headerErrorProbability = 0.7; 
+const double dataErrorProbability = 0.7;
+
+volatile sig_atomic_t alarmTriggered = 0;
+
+void propagationDelayHandler(int signo) {
+    (void) signo; 
+    alarmTriggered = 1;
+}
 
 
 
@@ -77,13 +87,16 @@ int destuffBytes(const unsigned char* input, int inputSize, unsigned char* outpu
     return outputSize;
 }
 
-
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
     alarmCount++;
-
-    printf("try #%d , trying to send again...\n", alarmCount);
+    if(alarmCount == oficial.nRetransmissions){
+        printf("try #%d failed...\n", alarmCount);
+    }
+    else{
+    printf("try #%d failed , trying to send again...\n", alarmCount);
+    }
 }
 
 unsigned char computeBCC2(const unsigned char *data, int size) {
@@ -92,6 +105,28 @@ unsigned char computeBCC2(const unsigned char *data, int size) {
         bcc2 ^= data[i];
     }
     return bcc2;
+}
+
+void sendRejectionFrame(unsigned char *frame) {
+    unsigned char buf2[5];
+    buf2[0] = 0x7E;
+    buf2[1] = 0x01;
+
+    // Update control byte based on received frame's control byte
+    if (frame[2] == 0x40) {
+        buf2[2] = 0x81;
+    } else {
+        buf2[2] = 0x01;
+    }
+
+    buf2[3] = buf2[1] ^ buf2[2];
+    buf2[4] = 0x7E;
+    
+    int byte = write(fd, buf2, 5);
+    if (byte < 0) {
+        perror("Failed to write to serial port");
+        // Handle the error (either by returning or continuing as per your logic)
+    }
 }
 
 
@@ -295,17 +330,18 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize, int number)
 {
+
+    alarmCount = 0;
+    alarmEnabled = FALSE;
     unsigned char stuffedBuffer[MAX_STUFFED_PAYLOAD_SIZE];
     int stuffedLength = stuffBytes(buf, bufSize, stuffedBuffer);
-    
+
     int frameSize = stuffedLength + 6;
     unsigned char *frame = (unsigned char *)malloc(frameSize);
     if (!frame) {
         perror("Memory allocation failed");
         return -1;
     }
-
-    
 
     unsigned char controlField = (number == 0) ? 0x00 : 0x40;
 
@@ -317,27 +353,37 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
     frame[frameSize - 2] = computeBCC2(buf, bufSize);
     frame[frameSize - 1] = FRAME_FLAG;
 
+    (void)signal(SIGALRM, alarmHandler);
 
-    int bytesWritten = write(fd, frame, frameSize);
-    if (bytesWritten < 0) {
-        perror("Failed to write to serial port");
-        return -1;
-    }
-    int bytess = 1;
-    int j = 0;
-    unsigned char buf3[1];
+    int bytesWritten;
     unsigned char buf2[5];
-    //memset 
-    while(j<5){
-        bytess = read(fd, buf3,1);
-        if(bytess<=0){
-            perror("Failed to read from the serial port");
-            return -1;
+    volatile int STOP = FALSE;
+
+    while (alarmCount < oficial.nRetransmissions && STOP == FALSE) {
+        if (alarmEnabled == FALSE) {
+            bytesWritten = write(fd, frame, frameSize);
+            if (bytesWritten < 0) {
+                perror("Failed to write to serial port");
+                free(frame);
+                return -1;
+            }
+            alarm(oficial.timeout);
+            alarmEnabled = TRUE;
         }
-        buf2[j] = buf3[0];
-        j++;
-    }
-    for (int i = 0; i < sizeof(buf2); i++){
+
+        int bytess = 1;
+        int j = 0;
+        unsigned char buf3[1];
+
+        while(j < 5) {
+            bytess = read(fd, buf3, 1);
+            if (bytess <= 0) {
+                break;
+            }
+            buf2[j] = buf3[0];
+            j++;
+        }
+        for (int i = 0; i < 5; i++){
                 if(i==0){
                     if(buf2[i]==0x7E){
                     }
@@ -361,6 +407,9 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
                 else if(buf2[i]==0x7E){
                 i = -1;
                 }
+                else if((number==0 && buf2[i]==0x01) || (number==1 && buf2[i]==0x81)){
+                    break;
+                }
                 else{
                     break;
                 }        
@@ -374,16 +423,22 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
                 }
                 if(i==4){
                     if(buf2[i]==0x7E){
-                    free(frame);
-                    return bytesWritten;
+                    alarm(0);
+                    STOP = TRUE;
                     }
                 else{
                     break;
                 }        
                 }
 
+        }
     }
-    return -1;
+    free(frame);
+    if (alarmCount == oficial.nRetransmissions) {
+        return -1;
+    } else {
+        return bytesWritten;
+    }
 }
 
 ////////////////////////////////////////////////
@@ -391,30 +446,55 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
-    unsigned char receivedBuffer[MAX_FRAME_SIZE];
+
+    /*
+    alarmTriggered = 0;  
+    
+    
+    signal(SIGALRM, propagationDelayHandler);
+    alarm(1);  
+
+    
+    while (!alarmTriggered) {
+        pause();  
+    }
+
+    */
     int receivedLength;
-    unsigned char frame[MAX_FRAME_SIZE];
-    int bytesRead = 1;
+    
     int byte;
     unsigned char buf2[5];
     unsigned char buf[1];
+    int destuffedLength;
     buf2[0]=0x7E;
     buf2[1]=0x01;
     buf2[2]=0x85;
     buf2[3]=buf2[1]^buf2[2];
     buf2[4]=0x7E;
+    volatile int rejected = TRUE;
 
+    while(rejected){
+    unsigned char buffer[MAX_FRAME_SIZE];
+    rejected = FALSE;
+    unsigned char frame[MAX_FRAME_SIZE];
+    int bytesRead = 1;
     byte = read(fd, frame, 1);
-    if (byte == -1 || frame[0] != 0x7E) {
-        printf("Error receiving data packet \n");
+    if (byte == -1) {
+        printf("Error reading data packet \n");
         return -1; // error or no data read
+    }
+    if(frame[0] != 0x7E){
+        sendRejectionFrame(frame);
+        rejected = TRUE;
+        continue;
     }
     int j=1;
     volatile int close = FALSE;
+    
     while(1){
         byte = read(fd, buf, 1);
         if (byte == -1) {
-            printf("Err0r receiving data packet \n");
+            printf("Error reading data\n");
             return -1; // error or no data read
         }
         if(j==2 && buf[0]==DISC){
@@ -424,7 +504,7 @@ int llread(unsigned char *packet)
         frame[j]=buf[0];
         bytesRead++;
         j++;
-        if(buf[0]==0x7E){
+        if(buf[0]==0x7E){            
             break;
         }
         
@@ -432,13 +512,16 @@ int llread(unsigned char *packet)
     receivedLength = bytesRead;
     if (ADDR_TX != frame[1]) {
         printf("Address check failed\n");
-        return -1; // header BCC check failed
+        sendRejectionFrame(frame);
+        rejected = TRUE;
+        continue;
     }
-
     if (0x00 != frame[2] && !close) {
         if(0x40 != frame[2]){
         printf("control check failed\n");
-        return -1; // header BCC check failed
+        sendRejectionFrame(frame);
+        rejected = TRUE;
+        continue;
         }
     }
 
@@ -447,37 +530,56 @@ int llread(unsigned char *packet)
     }
 
     unsigned char bcc1 = frame[1] ^ frame[2];
+
+    destuffedLength = destuffBytes(frame + 4, bytesRead - 6, packet);
+    if(destuffedLength == -1) {
+        printf("Error during byte destuffing.\n");
+        return -1;
+    }
+
+    if(correctlyReceivedFrameCount >= 5) {
+        if((rand() / (double) RAND_MAX) < headerErrorProbability) {
+            bcc1 = bcc1 ^ 0x01; 
+        }
+
+        if((rand() / (double) RAND_MAX) < dataErrorProbability) {
+            packet[rand() % destuffedLength] ^= 0x01;  
+        }
+
+        correctlyReceivedFrameCount = 0; 
+    }
+
     if (bcc1 != frame[3]) {
-        printf("BCC1 check failed\n");
-        return -1; // header BCC check failed
+        sendRejectionFrame(frame);
+        rejected = TRUE;
+        continue;
     }
     if(close){
         return 5;
     }
 
-    int destuffedLength = destuffBytes(frame + 4, bytesRead - 6, packet); // skipping the flags, address, control and BCCs
-    if(destuffedLength == -1) {
-        printf("Error during byte destuffing.\n");
-        return -1;
-    }
+    
     
 
     unsigned char receivedBcc2 = frame[bytesRead-2];
     unsigned char calculatedBcc2 = computeBCC2(packet, destuffedLength);
     if (receivedBcc2 != calculatedBcc2) {
-        printf("BCC2 check failed\n");
-        return -1; 
+        sendRejectionFrame(frame);
+        rejected = TRUE;
+        continue;
     }
-    
+    }
     byte = write(fd, buf2, 5);
     if(byte < 0) {
         perror("Failed to write to serial port");
         return -1;
-    }
-
-    // If everything is good, copy the data to the packet
+        }
+    correctlyReceivedFrameCount++;
     return destuffedLength;
+    
+    
 }
+
 
 ////////////////////////////////////////////////
 // LLCLOSE
@@ -506,14 +608,23 @@ int llclose(int showStatistics)
     disc_rx[2]=DISC;
     disc_rx[3]=disc_rx[1]^disc_rx[2];
     disc_rx[4]=FRAME_FLAG;
+    alarmEnabled = FALSE;
+    alarmCount = 0;
    
     if(oficial.role == LlTx){
         fd = open(oficial.serialPort, O_RDWR | O_NOCTTY);
-        int byte = write(fd, disc_tx, 5);
-        if(byte < 0) {
-            perror("Failed to write to serial port");
-        return -1;
-        }
+        volatile int STOP = FALSE;
+        (void) signal(SIGALRM, alarmHandler);
+         while (alarmCount < oficial.nRetransmissions && STOP == FALSE) {
+            if (alarmEnabled == FALSE) {
+                int byte = write(fd, disc_tx, 5);
+                if (byte < 0) {
+                    perror("Failed to write to serial port");
+                    return -1;
+                }
+                alarm(oficial.timeout);
+                alarmEnabled = TRUE;
+            }
         int j=0;
 
          while(j<5){
@@ -560,9 +671,12 @@ int llclose(int showStatistics)
             }
             buf[j] = buff[0];
             j++;
+            }
+            alarm(0); 
+            STOP = TRUE;
         }
 
-        byte = write(fd, ua_tx, 5);
+        int byte = write(fd, ua_tx, 5);
         if(byte < 0) {
         perror("Failed to write to serial port");
         return -1;
