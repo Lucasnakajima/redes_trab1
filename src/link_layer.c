@@ -29,6 +29,13 @@ const double headerErrorProbability = 0.7;
 const double dataErrorProbability = 0.7;
 
 volatile sig_atomic_t alarmTriggered = 0;
+int T_prop = 1;
+int totalFramesSentOrReceived = 0; 
+int totalFramesWithError = 0;
+int totalBitsTransmitted;
+struct timeval start_time, end_time;
+double time_duration;
+int framesSizeInBytes;
 
 void propagationDelayHandler(int signo) {
     (void) signo; 
@@ -108,6 +115,8 @@ unsigned char computeBCC2(const unsigned char *data, int size) {
 }
 
 void sendRejectionFrame(unsigned char *frame) {
+    totalFramesWithError++;
+    framesSizeInBytes = framesSizeInBytes + 5;
     unsigned char buf2[5];
     buf2[0] = 0x7E;
     buf2[1] = 0x01;
@@ -179,20 +188,22 @@ int llopen(LinkLayer connectionParameters)
     printf("New Connection set\n");
 
     if(connectionParameters.role == LlTx){
+    gettimeofday(&start_time, NULL);
     unsigned char buf[5] = {0};
     unsigned char buf2[5];
     volatile int STOP = FALSE;
          (void)signal(SIGALRM, alarmHandler);
         while (alarmCount < connectionParameters.nRetransmissions && STOP == FALSE) {
         if (alarmEnabled == FALSE) {
+            
             buf[0] = FRAME_FLAG;  // flag
             buf[1] = ADDR_TX;  // addr
             buf[2] = 0x03;  // control
             buf[3] = buf[1] ^ buf[2];   // BCC
             buf[4] = FRAME_FLAG;
-
+            framesSizeInBytes = framesSizeInBytes + 5;
             int bytes = write(fd, buf, 5);
-    
+
             alarm(connectionParameters.timeout);   
             alarmEnabled = TRUE;
         }
@@ -265,6 +276,7 @@ int llopen(LinkLayer connectionParameters)
     // Restore the old port settings
     }
     else{
+    gettimeofday(&start_time, NULL);
     unsigned char buf[5];
     unsigned char buf2[5];
     buf2[0]=FRAME_FLAG;
@@ -318,7 +330,7 @@ int llopen(LinkLayer connectionParameters)
         }
         
         }
-    
+    framesSizeInBytes = framesSizeInBytes + 5;
     int bytes = write(fd, buf2, 5);
     }
 
@@ -361,6 +373,8 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
 
     while (alarmCount < oficial.nRetransmissions && STOP == FALSE) {
         if (alarmEnabled == FALSE) {
+            framesSizeInBytes = framesSizeInBytes + frameSize;
+            totalFramesSentOrReceived++;
             bytesWritten = write(fd, frame, frameSize);
             if (bytesWritten < 0) {
                 perror("Failed to write to serial port");
@@ -408,6 +422,7 @@ int llwrite(const unsigned char *buf, int bufSize, int number)
                 i = -1;
                 }
                 else if((number==0 && buf2[i]==0x01) || (number==1 && buf2[i]==0x81)){
+                    totalFramesWithError++;
                     break;
                 }
                 else{
@@ -452,7 +467,7 @@ int llread(unsigned char *packet)
     
     
     signal(SIGALRM, propagationDelayHandler);
-    alarm(1);  
+    alarm(T_prop);  
 
     
     while (!alarmTriggered) {
@@ -509,6 +524,7 @@ int llread(unsigned char *packet)
         }
         
     }
+    totalFramesSentOrReceived++;
     receivedLength = bytesRead;
     if (ADDR_TX != frame[1]) {
         printf("Address check failed\n");
@@ -569,6 +585,7 @@ int llread(unsigned char *packet)
         continue;
     }
     }
+    framesSizeInBytes = framesSizeInBytes + 5;
     byte = write(fd, buf2, 5);
     if(byte < 0) {
         perror("Failed to write to serial port");
@@ -617,6 +634,7 @@ int llclose(int showStatistics)
         (void) signal(SIGALRM, alarmHandler);
          while (alarmCount < oficial.nRetransmissions && STOP == FALSE) {
             if (alarmEnabled == FALSE) {
+                framesSizeInBytes = framesSizeInBytes + 5;
                 int byte = write(fd, disc_tx, 5);
                 if (byte < 0) {
                     perror("Failed to write to serial port");
@@ -675,18 +693,20 @@ int llclose(int showStatistics)
             alarm(0); 
             STOP = TRUE;
         }
-
+        framesSizeInBytes = framesSizeInBytes + 5;
         int byte = write(fd, ua_tx, 5);
         if(byte < 0) {
         perror("Failed to write to serial port");
         return -1;
         }
+        gettimeofday(&end_time, NULL);
         close(fd);
-        return 1;
+        
 
     }
 
     else{
+        framesSizeInBytes = framesSizeInBytes + 5;
         int byte = write(fd, disc_rx, 5);
         int j=0;
 
@@ -736,9 +756,23 @@ int llclose(int showStatistics)
             buf[j] = buff[0];
             j++;
         }
+        gettimeofday(&end_time, NULL);
         close(fd);
-        return 1;
     }
-
-    return -1;
+    if(showStatistics){
+        time_duration = (end_time.tv_sec - start_time.tv_sec) * 1.0;      
+        time_duration += (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        totalBitsTransmitted = framesSizeInBytes * 8;
+        double bitrate = totalBitsTransmitted / time_duration;
+        if(totalFramesWithError != 0){
+        double FER = (double)totalFramesWithError / totalFramesSentOrReceived;
+        printf("FER: %f\n", FER);
+        }
+        else{
+        printf("FER: %d\n", 0);
+        }
+        printf("T_prop: %d\n", T_prop);
+        printf("bitrate: %f bits/s\n", bitrate);
+    }
+    return 1;
 }
